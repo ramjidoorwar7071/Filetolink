@@ -1,90 +1,56 @@
-import pandas as pd
-import requests
-import time
 import os
-from datetime import datetime
+from flask import Flask, send_from_directory
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from threading import Thread
 
-# Nifty 50 stocks (example subset)
-nifty_stocks = ['RELIANCE', 'TCS', 'INFY', 'HDFC', 'ICICIBANK', 'LT', 'SBIN']
+# ✅ Aapka real bot token
+TELEGRAM_BOT_TOKEN = "7492936947:AAHnynRFwUsRyz7tbncm7zP0BjR59_GJkzI"
 
-# Excel writer setup
-output_file = 'Nifty_Options_Analysis.xlsx'
+# ✅ Uploads folder banega yahan
+UPLOAD_FOLDER = "uploads"
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-# Ensure the file exists
-if not os.path.exists(output_file):
-    # Create an empty DataFrame and save it to the file
-    df = pd.DataFrame(columns=['Time', 'Symbol', 'Strike Price', 'Option Type', 'LTP', 'Change (%)', 'OI', 'OI Change', 'Divergence Type'])
-    df.to_excel(output_file, index=False, sheet_name='Live Data')
+# ✅ Flask app start karega server
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-def fetch_option_chain(symbol):
-    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US"
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-        else:
-            print(f"Failed for {symbol}")
-            return None
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
+@app.route('/')
+def home():
+    return "🤖 Bot is Running!"
 
-def analyze_data(data, symbol):
-    records = []
-    time_now = datetime.now().strftime("%H:%M:%S")
-    if not data:
-        return []
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-    try:
-        ce_data = data['records']['data']
-        for entry in ce_data:
-            strike_price = entry.get('strikePrice')
-            for option_type in ['CE', 'PE']:
-                option_data = entry.get(option_type)
-                if option_data:
-                    ltp = option_data.get('lastPrice', 0)
-                    change = option_data.get('change', 0)
-                    oi = option_data.get('openInterest', 0)
-                    change_oi = option_data.get('changeinOpenInterest', 0)
+# ✅ Telegram bot file receive karega
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    if not document:
+        await update.message.reply_text("❌ Please send a valid file.")
+        return
 
-                    # Divergence logic
-                    divergence = ''
-                    if change > 0 and change_oi < 0:
-                        divergence = 'Bearish'
-                    elif change < 0 and change_oi > 0:
-                        divergence = 'Bullish'
+    file = await context.bot.get_file(document.file_id)
+    filename = document.file_name
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
 
-                    if abs(change_oi) > 10000:  # sudden OI spike threshold
-                        records.append([
-                            time_now, symbol, strike_price, option_type, ltp,
-                            change, oi, change_oi, divergence
-                        ])
-        return records
-    except:
-        return []
+    await file.download_to_drive(filepath)
 
-# Main loop
-while True:
-    all_data = []
-    for symbol in nifty_stocks:
-        option_data = fetch_option_chain(symbol)
-        parsed = analyze_data(option_data, symbol)
-        all_data.extend(parsed)
+    # ✅ Public download link (👇 Render.com URL yahan daalo)
+    public_url = f"https://your-app-name.onrender.com/uploads/{filename}"
 
-    df = pd.DataFrame(all_data, columns=[
-        'Time', 'Symbol', 'Strike Price', 'Option Type',
-        'LTP', 'Change (%)', 'OI', 'OI Change', 'Divergence Type'
-    ])
+    await update.message.reply_text(
+        f"✅ File uploaded successfully!\n📥 Download link:\n{public_url}"
+    )
 
-    # Save to Excel without overwriting the entire sheet
-    with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-        df.to_excel(writer, index=False, sheet_name='Live Data')
+# ✅ Telegram bot start function
+def run_bot():
+    app_telegram = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app_telegram.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app_telegram.run_polling()
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Data updated.")
-
-    time.sleep(1)  # Update every second
-
+# ✅ Flask + Telegram parallel run
+if __name__ == '__main__':
+    Thread(target=run_bot).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
